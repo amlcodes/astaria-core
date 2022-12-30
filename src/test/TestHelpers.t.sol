@@ -148,7 +148,7 @@ contract TestHelpers is ConsiderationTester {
 
   string private checkpointLabel;
   uint256 private checkpointGasLeft = 1; // Start the slot warm.
-
+  bool flashLendEnabled = false;
   ILienToken.Details public blueChipDetails =
     ILienToken.Details({
       maxAmount: 150 ether,
@@ -959,6 +959,7 @@ contract TestHelpers is ConsiderationTester {
 
     return
       IAstariaRouter.Commitment({
+        flashLend: flashLendEnabled,
         tokenContract: params.tokenContract,
         tokenId: params.tokenId,
         lienRequest: IAstariaRouter.NewLienRequest({

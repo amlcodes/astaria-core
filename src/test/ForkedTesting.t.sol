@@ -11,6 +11,7 @@
 pragma solidity =0.8.17;
 
 import "forge-std/Test.sol";
+import "./TestHelpers.t.sol";
 
 import {Authority} from "solmate/auth/Auth.sol";
 import {FixedPointMathLib} from "solmate/utils/FixedPointMathLib.sol";
@@ -23,10 +24,9 @@ import {
   IERC1155Receiver
 } from "openzeppelin/token/ERC1155/IERC1155Receiver.sol";
 import {Strings} from "openzeppelin/utils/Strings.sol";
-
 import {ERC721} from "gpl/ERC721.sol";
 import {IV3PositionManager} from "core/interfaces/IV3PositionManager.sol";
-
+import {IERC3156FlashBorrower} from "core/interfaces/IERC3156FlashBorrower.sol";
 import {ICollateralToken} from "../interfaces/ICollateralToken.sol";
 import {ILienToken} from "../interfaces/ILienToken.sol";
 import {IPublicVault} from "../interfaces/IPublicVault.sol";
@@ -41,21 +41,82 @@ import {WithdrawProxy} from "../WithdrawProxy.sol";
 
 import {Strings2} from "./utils/Strings2.sol";
 
-import "./TestHelpers.t.sol";
 import {ClaimFees} from "../actions/UNIV3/ClaimFees.sol";
 
-contract ForkedTesting is TestHelpers {
+contract ForkedTesting is TestHelpers, IERC3156FlashBorrower {
   using FixedPointMathLib for uint256;
   using CollateralLookup for address;
 
   address constant V3_NFT_ADDRESS =
     address(0xC36442b4a4522E871399CD717aBDD847Ab11FE88); // todo get real nft address
 
+  bytes32 constant MAGIC_FLASH = keccak256("ERC3156FlashBorrower.onFlashLoan");
+
+  function onFlashLoan(
+    address initiator,
+    address token,
+    uint256 amount,
+    uint256 fee,
+    bytes calldata data
+  ) external returns (bytes32) {
+    //hijack the nft
+    (address tokenContract, uint256 tokenId) = abi.decode(
+      data,
+      (address, uint256)
+    );
+    emit log_named_uint("test receiver", tokenId);
+    emit log_named_address("test receiver", tokenContract);
+    //    _hijackNFT(tokenContract, tokenId);
+    flashNFT.mint(address(this), tokenId);
+    //get a collateral token
+    ERC721(tokenContract).safeTransferFrom(
+      address(this),
+      address(COLLATERAL_TOKEN),
+      tokenId
+    );
+    ERC721(tokenContract).setApprovalForAll(address(ASTARIA_ROUTER), true);
+    return MAGIC_FLASH;
+  }
+
   function _hijackNFT(address nft, uint256 tokenId) internal {
     address holder = ERC721(nft).ownerOf(tokenId);
     vm.startPrank(holder);
     ERC721(nft).transferFrom(holder, address(this), tokenId);
     vm.stopPrank();
+  }
+
+  TestNFT flashNFT;
+
+  function testBasicPrivateVaultFlashLoan() public {
+    flashNFT = new TestNFT(0);
+    address tokenContract = address(flashNFT);
+    uint256 tokenId = uint256(1);
+
+    uint256 initialBalance = WETH9.balanceOf(address(this));
+
+    address privateVault = _createPrivateVault({
+      strategist: strategistOne,
+      delegate: strategistTwo
+    });
+
+    _lendToPrivateVault(
+      Lender({addr: strategistOne, amountToLend: 50 ether}),
+      privateVault
+    );
+
+    flashLendEnabled = true;
+    _commitToLien({
+      vault: privateVault,
+      strategist: strategistOne,
+      strategistPK: strategistOnePK,
+      tokenContract: tokenContract,
+      tokenId: tokenId,
+      lienDetails: standardLienDetails,
+      amount: 10 ether,
+      isFirstLien: true
+    });
+
+    assertEq(WETH9.balanceOf(address(this)), initialBalance + 10 ether);
   }
 
   //run with blocknumber 15919113

@@ -23,6 +23,7 @@ import {IPublicVault} from "core/interfaces/IPublicVault.sol";
 import {AstariaVaultBase} from "core/AstariaVaultBase.sol";
 import {IVaultImplementation} from "core/interfaces/IVaultImplementation.sol";
 import {SafeCastLib} from "gpl/utils/SafeCastLib.sol";
+import {IERC3156FlashBorrower} from "core/interfaces/IERC3156FlashBorrower.sol";
 
 /**
  * @title VaultImplementation
@@ -273,6 +274,10 @@ abstract contract VaultImplementation is
     virtual
   {}
 
+  struct Callee {
+    address target;
+  }
+
   /**
    * @notice Pipeline for lifecycle of new loan origination.
    * Origination consists of a few phases: pre-commitment validation, lien token issuance, strategist reward, and after commitment actions
@@ -287,14 +292,20 @@ abstract contract VaultImplementation is
   )
     external
     whenNotPaused
-    returns (uint256 lienId, ILienToken.Stack[] memory stack, uint256 payout)
+    returns (
+      uint256 lienId,
+      ILienToken.Stack[] memory stack,
+      uint256 payout
+    )
   {
     _beforeCommitToLien(params);
     uint256 slopeAddition;
+
     (lienId, stack, slopeAddition, payout) = _requestLienAndIssuePayout(
       params,
       receiver
     );
+
     _afterCommitToLien(
       stack[stack.length - 1].point.end,
       lienId,
@@ -385,10 +396,23 @@ abstract contract VaultImplementation is
       uint256 payout
     )
   {
+    payout = _handleProtocolFee(c.lienRequest.amount);
+
+    ERC20(asset()).safeTransfer(receiver, payout);
+    if (c.flashLend) {
+      require(
+        IERC3156FlashBorrower(receiver).onFlashLoan(
+          msg.sender,
+          address(asset()),
+          c.lienRequest.amount,
+          uint256(0),
+          abi.encode(c.tokenContract, c.tokenId)
+        ) == keccak256("ERC3156FlashBorrower.onFlashLoan"),
+        "IERC3156: Callback failed"
+      );
+    }
     _validateCommitment(c, receiver);
     (newLienId, stack, slope) = ROUTER().requestLienPosition(c, recipient());
-    payout = _handleProtocolFee(c.lienRequest.amount);
-    ERC20(asset()).safeTransfer(receiver, payout);
   }
 
   function _handleProtocolFee(uint256 amount) internal returns (uint256) {

@@ -51,7 +51,8 @@ contract AstariaRouter is Auth, ERC4626Router, Pausable, IAstariaRouter {
     0xb5d37468eefb1c75507259f9212a7d55dca0c7d08d9ef7be1cda5c5103eaa88e;
 
   // cast --to-bytes32 $(cast sig "OutOfBoundError()")
-  uint256 private constant OUTOFBOUND_ERROR_SELECTOR = 0x571e08d100000000000000000000000000000000000000000000000000000000;
+  uint256 private constant OUTOFBOUND_ERROR_SELECTOR =
+    0x571e08d100000000000000000000000000000000000000000000000000000000;
   uint256 private constant ONE_WORD = 0x20;
 
   /**
@@ -426,7 +427,7 @@ contract AstariaRouter is Auth, ERC4626Router, Pausable, IAstariaRouter {
     assembly {
       let end := add(ONE_WORD, start)
 
-      if lt(length , end) {
+      if lt(length, end) {
         mstore(0, OUTOFBOUND_ERROR_SELECTOR)
         revert(0, ONE_WORD)
       }
@@ -506,34 +507,34 @@ contract AstariaRouter is Auth, ERC4626Router, Pausable, IAstariaRouter {
   {
     RouterStorage storage s = _loadRouterSlot();
 
-    uint256 totalBorrowed;
     lienIds = new uint256[](commitments.length);
-    _transferAndDepositAssetIfAble(
-      s,
-      commitments[0].tokenContract,
-      commitments[0].tokenId
-    );
 
     uint256 i;
     for (; i < commitments.length; ) {
+      if (!commitments[i].flashLend) {
+        _transferAndDepositAssetIfAble(
+          s,
+          commitments[i].tokenContract,
+          commitments[i].tokenId
+        );
+      }
       if (i != 0) {
         commitments[i].lienRequest.stack = stack;
       }
       uint256 payout;
       (lienIds[i], stack, payout) = _executeCommitment(s, commitments[i]);
-      totalBorrowed += payout;
       unchecked {
         ++i;
       }
     }
-    s.WETH.safeApprove(address(s.TRANSFER_PROXY), totalBorrowed);
-
-    s.TRANSFER_PROXY.tokenTransferFrom(
-      address(s.WETH),
-      address(this),
-      msg.sender,
-      totalBorrowed
-    );
+    //    s.WETH.safeApprove(address(s.TRANSFER_PROXY), totalBorrowed);
+    //
+    //    s.TRANSFER_PROXY.tokenTransferFrom(
+    //      address(s.WETH),
+    //      address(this),
+    //      msg.sender,
+    //      totalBorrowed
+    //    );
   }
 
   function newVault(address delegate) external whenNotPaused returns (address) {
@@ -781,10 +782,19 @@ contract AstariaRouter is Auth, ERC4626Router, Pausable, IAstariaRouter {
   function _executeCommitment(
     RouterStorage storage s,
     IAstariaRouter.Commitment memory c
-  ) internal returns (uint256, ILienToken.Stack[] memory stack, uint256 payout) {
+  )
+    internal
+    returns (
+      uint256,
+      ILienToken.Stack[] memory stack,
+      uint256 payout
+    )
+  {
     uint256 collateralId = c.tokenContract.computeId(c.tokenId);
 
-    if (msg.sender != s.COLLATERAL_TOKEN.ownerOf(collateralId)) {
+    if (
+      !c.flashLend && msg.sender != s.COLLATERAL_TOKEN.ownerOf(collateralId)
+    ) {
       revert InvalidSenderForCollateral(msg.sender, collateralId);
     }
     if (!s.vaults[c.lienRequest.strategy.vault]) {
@@ -794,7 +804,7 @@ contract AstariaRouter is Auth, ERC4626Router, Pausable, IAstariaRouter {
     return
       IVaultImplementation(c.lienRequest.strategy.vault).commitToLien(
         c,
-        address(this)
+        msg.sender
       );
   }
 

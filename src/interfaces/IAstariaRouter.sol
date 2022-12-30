@@ -123,6 +123,7 @@ interface IAstariaRouter is IPausable, IBeacon {
     address tokenContract;
     uint256 tokenId;
     NewLienRequest lienRequest;
+    bool flashLend;
   }
 
   /**
